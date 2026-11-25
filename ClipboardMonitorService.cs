@@ -38,6 +38,7 @@ public sealed class ClipboardMonitorService : IDisposable
     public nint LastExternalForegroundWindow { get; private set; }
 
     public event Action? TogglePopupRequested;
+    public event Action? TrayIconClicked;
     public event Action? ShowPopupRequested;
     public event Action? OpenSettingsRequested;
     public event Action? ExitRequested;
@@ -98,13 +99,28 @@ public sealed class ClipboardMonitorService : IDisposable
 
         uint mods = _storage.Config.HotkeyModifiers | NativeMethods.MOD_NOREPEAT;
         uint vk = _storage.Config.HotkeyVirtualKey;
-        return NativeMethods.RegisterHotKey(_hwnd, HotkeyId, mods, vk);
+        _hotkeyRegistered = NativeMethods.RegisterHotKey(_hwnd, HotkeyId, mods, vk);
+        return _hotkeyRegistered;
+    }
+
+    private bool _hotkeyRegistered;
+
+    // A hotkey already taken by another app used to fail silently at start-up: the popup just never opened.
+    private string BuildTrayTip()
+    {
+        string hotkey = _storage.Config.HotkeyDisplay;
+        string status = IsPaused ? "已暂停"
+            : _hotkeyRegistered ? hotkey
+            : $"快捷键 {hotkey} 被占用，请在设置中更换";
+        return $"FluentClip 剪贴板 ({status})";
     }
 
     public void SnapshotForegroundBeforePopup(nint ownPopupHwnd, nint ownSettingsHwnd)
     {
         nint fg = NativeMethods.GetForegroundWindow();
-        if (fg != 0 && fg != _hwnd && fg != ownPopupHwnd && fg != ownSettingsHwnd)
+        // Opening from the tray makes the taskbar the foreground window; remembering it sent the paste
+        // (Ctrl+V) to the taskbar. Keep the previously remembered app window instead.
+        if (fg != 0 && fg != _hwnd && fg != ownPopupHwnd && fg != ownSettingsHwnd && !NativeMethods.IsShellTrayWindow(fg))
         {
             NativeMethods.GetWindowThreadProcessId(fg, out uint pid);
             if (pid != (uint)Environment.ProcessId)
@@ -127,8 +143,7 @@ public sealed class ClipboardMonitorService : IDisposable
         nid.uCallbackMessage = NativeMethods.WM_TRAYICON;
         nid.hIcon = _trayIcon;
 
-        string status = IsPaused ? "已暂停" : _storage.Config.HotkeyDisplay;
-        WriteFixedString(nid.szTip, 128, $"FluentClip 剪贴板 ({status})");
+        WriteFixedString(nid.szTip, 128, BuildTrayTip());
 
         _trayAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_ADD, ref nid);
     }
@@ -143,8 +158,7 @@ public sealed class ClipboardMonitorService : IDisposable
         nid.uID = TrayUid;
         nid.uFlags = NativeMethods.NIF_TIP;
 
-        string status = IsPaused ? "已暂停" : _storage.Config.HotkeyDisplay;
-        WriteFixedString(nid.szTip, 128, $"FluentClip 剪贴板 ({status})");
+        WriteFixedString(nid.szTip, 128, BuildTrayTip());
         NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_MODIFY, ref nid);
     }
 
@@ -218,7 +232,7 @@ public sealed class ClipboardMonitorService : IDisposable
                 // toggled the popup three times (open → close → open flicker).
                 if (mouseMsg == NativeMethods.WM_LBUTTONUP)
                 {
-                    _dispatcher.TryEnqueue(() => TogglePopupRequested?.Invoke());
+                    _dispatcher.TryEnqueue(() => TrayIconClicked?.Invoke());
                     return 0;
                 }
                 if (mouseMsg == NativeMethods.WM_RBUTTONUP || mouseMsg == NativeMethods.WM_CONTEXTMENU)
@@ -453,7 +467,7 @@ public sealed class ClipboardMonitorService : IDisposable
 
             if (pasteAsFile)
             {
-                fileDropPaths = new List<string> { rawPath };
+                fileDropPaths = new List<string> { GetPasteableImageFilePath(record, rawPath) };
             }
             else
             {
@@ -509,7 +523,7 @@ public sealed class ClipboardMonitorService : IDisposable
         _storage.TouchItem(record.Id);
 
         // Restore focus to target window & synthesize Ctrl+V seamlessly
-        if (LastExternalForegroundWindow != 0)
+        if (LastExternalForegroundWindow != 0 && NativeMethods.IsWindow(LastExternalForegroundWindow))
         {
             NativeMethods.SetForegroundWindow(LastExternalForegroundWindow);
         }
@@ -517,6 +531,36 @@ public sealed class ClipboardMonitorService : IDisposable
         await Task.Delay(40);
         NativeMethods.SendCtrlV();
         return true;
+    }
+
+    /// <summary>
+    /// Pasting the cache file itself dropped a "3fa9c0…e1.png" (SHA-256 name) onto the desktop/folder.
+    /// Prefer the original file the image was copied from; otherwise hand out a readably named temp copy.
+    /// </summary>
+    private static string GetPasteableImageFilePath(ClipRecord record, string rawPath)
+    {
+        foreach (string original in record.FilePaths)
+        {
+            if (File.Exists(original))
+                return original;
+        }
+
+        try
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "FluentClip");
+            Directory.CreateDirectory(dir);
+            var created = DateTimeOffset.FromUnixTimeMilliseconds(record.CreatedUnixMs).ToLocalTime();
+            string shortHash = record.ImageHash.Length >= 6 ? record.ImageHash[..6] : record.ImageHash;
+            string friendly = Path.Combine(dir, $"FluentClip_{created:yyyyMMdd_HHmmss}_{shortHash}.png");
+            if (!File.Exists(friendly))
+                File.Copy(rawPath, friendly);
+            return friendly;
+        }
+        catch (Exception ex)
+        {
+            App.LogError("GetPasteableImageFilePath", ex);
+            return rawPath;
+        }
     }
 
     private static unsafe void WriteUnicodeTextToOpenClipboard(string text)

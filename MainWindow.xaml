@@ -5,6 +5,34 @@
     Title="FluentClip">
 
     <Grid x:Name="RootGrid" KeyDown="RootGrid_KeyDown" Padding="12,10,12,10">
+        <!--
+            Cards are built in code. Their theme brushes live in styles so {ThemeResource} resolves against
+            this window's RequestedTheme (the user's Dark/Light choice) and re-resolves when it changes.
+            Looking brushes up in Application.Current.Resources always returned the *system* theme's brush.
+        -->
+        <Grid.Resources>
+            <Style x:Key="ClipCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="ClipCardSelectedStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="SubtleBadgeStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+            </Style>
+            <Style x:Key="SurfaceStrokeBorderStyle" TargetType="Border">
+                <Setter Property="BorderBrush" Value="{ThemeResource SurfaceStrokeColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="SecondaryTextStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Style>
+            <Style x:Key="TertiaryTextStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+            </Style>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />

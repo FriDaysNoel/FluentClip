@@ -372,6 +372,34 @@ internal static unsafe class NativeMethods
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
+    public const uint ASFW_ANY = unchecked((uint)-1);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AllowSetForegroundWindow(uint dwProcessId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(nint hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassNameW(nint hWnd, char* lpClassName, int nMaxCount);
+
+    public static string GetWindowClassName(nint hwnd)
+    {
+        char* buf = stackalloc char[256];
+        int len = GetClassNameW(hwnd, buf, 256);
+        return len > 0 ? new string(buf, 0, len) : string.Empty;
+    }
+
+    /// <summary>Taskbar / tray / notification-overflow windows: never a sensible paste target.</summary>
+    public static bool IsShellTrayWindow(nint hwnd)
+    {
+        string cls = GetWindowClassName(hwnd);
+        return cls is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow"
+            or "TopLevelWindowForOverflowXamlIsland" or "Windows.UI.Core.CoreWindow";
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);

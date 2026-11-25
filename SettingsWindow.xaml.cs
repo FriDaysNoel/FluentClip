@@ -93,7 +93,11 @@ public sealed partial class SettingsWindow : Window
         mi.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>();
         NativeMethods.GetMonitorInfoW(hMon, ref mi);
 
-        uint dpi = NativeMethods.GetDpiForWindow(Hwnd);
+        // DPI of the monitor the window is centred on, not the one it was created on.
+        uint dpi = 0;
+        if (NativeMethods.GetDpiForMonitor(hMon, NativeMethods.MDT_EFFECTIVE_DPI, out uint monDpiX, out _) == 0)
+            dpi = monDpiX;
+        if (dpi == 0) dpi = NativeMethods.GetDpiForWindow(Hwnd);
         if (dpi == 0) dpi = 96;
         double scale = dpi / 96.0;
 
@@ -276,7 +280,7 @@ public sealed partial class SettingsWindow : Window
         }
 
         uint vk = (uint)e.Key;
-        string keyLabel = e.Key.ToString().Replace("Number", "");
+        string keyLabel = GetKeyLabel(e.Key);
         parts.Add(keyLabel);
         string display = string.Join(" + ", parts);
 
@@ -314,6 +318,42 @@ public sealed partial class SettingsWindow : Window
             App.Storage.Config.HotkeyDisplay = oldDisplay;
             App.Monitor.RegisterConfiguredHotkey();
             ShowBanner($"快捷键 {display} 已被其他软件占用，请选择其他组合键。", InfoBarSeverity.Error);
+        }
+    }
+
+    // VirtualKey has no names for OEM symbol keys, so e.g. Alt+` was displayed as "Alt + 192".
+    private static string GetKeyLabel(VirtualKey key)
+    {
+        switch ((int)key)
+        {
+            case 0xBA: return ";";
+            case 0xBB: return "=";
+            case 0xBC: return ",";
+            case 0xBD: return "-";
+            case 0xBE: return ".";
+            case 0xBF: return "/";
+            case 0xC0: return "`";
+            case 0xDB: return "[";
+            case 0xDC: return "\\";
+            case 0xDD: return "]";
+            case 0xDE: return "'";
+        }
+
+        if (key >= VirtualKey.Number0 && key <= VirtualKey.Number9)
+            return ((int)key - (int)VirtualKey.Number0).ToString(CultureInfo.InvariantCulture);
+        if (key >= VirtualKey.NumberPad0 && key <= VirtualKey.NumberPad9)
+            return "Num " + ((int)key - (int)VirtualKey.NumberPad0).ToString(CultureInfo.InvariantCulture);
+
+        return key.ToString();
+    }
+
+    private void RecordHotkeyBtn_LostFocus(object sender, RoutedEventArgs e)
+    {
+        // Clicking elsewhere used to leave the button stuck on "请按下组合键..." and still capturing keys.
+        if (_isRecordingHotkey)
+        {
+            _isRecordingHotkey = false;
+            RecordHotkeyBtn.Content = "录制自定义键位";
         }
     }
 

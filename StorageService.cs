@@ -23,6 +23,10 @@ public sealed class StorageService
 
     private HistoryDatabase _db = new();
 
+    // GetStats enumerates every cached PNG; the popup calls it on each refresh (every search keystroke).
+    // Every mutation goes through SaveHistoryDatabaseInternal / LoadHistoryDatabase, which reset this.
+    private CacheStats? _statsCache;
+
     public BootstrapConfig Config { get; private set; } = new();
 
     public event Action? HistoryChanged;
@@ -126,6 +130,7 @@ public sealed class StorageService
 
     private void LoadHistoryDatabase()
     {
+        _statsCache = null;
         if (!File.Exists(HistoryDbPath))
         {
             _db = new HistoryDatabase();
@@ -145,6 +150,7 @@ public sealed class StorageService
 
     private void SaveHistoryDatabaseInternal()
     {
+        _statsCache = null;
         try
         {
             EnsureCacheDirectories(CacheRoot);
@@ -195,9 +201,13 @@ public sealed class StorageService
         }
     }
 
+    // history.json is rewritten on every change, so one multi-megabyte paste (a log file, a minified bundle)
+    // would make every later copy slow. Such texts are not recorded.
+    private const int MaxTextClipChars = 1_000_000;
+
     public async Task AddTextClipAsync(string text, string sourceApp)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text) || text.Length > MaxTextClipChars) return;
 
         string hash = ComputeSha256(Encoding.UTF8.GetBytes(text));
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -618,6 +628,8 @@ public sealed class StorageService
         _ioLock.Wait();
         try
         {
+            if (_statsCache != null) return _statsCache;
+
             long imgBytes = 0;
             if (Directory.Exists(RawImagesDir))
             {
@@ -636,7 +648,7 @@ public sealed class StorageService
 
             long dbBytes = File.Exists(HistoryDbPath) ? new FileInfo(HistoryDbPath).Length : 0;
 
-            return new CacheStats
+            return _statsCache = new CacheStats
             {
                 CacheDirectory = CacheRoot,
                 TotalItems = _db.Items.Count,

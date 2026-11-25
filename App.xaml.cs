@@ -71,6 +71,9 @@ public sealed partial class App : Application
             uint showMsg = NativeMethods.RegisterWindowMessageW("FluentClip_ShowPopup_IPC");
             if (showMsg != 0)
             {
+                // We (the process the user just launched) own the foreground right; hand it over so the running
+                // instance's SetForegroundWindow succeeds and the popup actually gets keyboard focus.
+                NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
                 NativeMethods.PostMessageW(NativeMethods.HWND_BROADCAST, showMsg, 0, 0);
             }
             Environment.Exit(0);
@@ -82,6 +85,7 @@ public sealed partial class App : Application
 
         Monitor = new ClipboardMonitorService(Storage, DispatcherQueue.GetForCurrentThread());
         Monitor.TogglePopupRequested += TogglePopup;
+        Monitor.TrayIconClicked += OnTrayIconClicked;
         Monitor.ShowPopupRequested += ShowPopup;
         Monitor.OpenSettingsRequested += ShowSettings;
         Monitor.ExitRequested += ExitApplication;
@@ -114,6 +118,17 @@ public sealed partial class App : Application
         {
             ShowPopup();
         }
+    }
+
+    private void OnTrayIconClicked()
+    {
+        if (_popupWindow == null) return;
+
+        // The click on the taskbar already hid the popup via deactivation: treat it as "close", don't re-open.
+        if (!_popupWindow.IsPopupVisible && _popupWindow.WasJustHiddenByDeactivation)
+            return;
+
+        TogglePopup();
     }
 
     public void ShowPopup()

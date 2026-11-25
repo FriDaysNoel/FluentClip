@@ -188,6 +188,7 @@
                                     VerticalAlignment="Center"
                                     Content="录制自定义键位"
                                     Click="RecordHotkeyBtn_Click"
+                                    LostFocus="RecordHotkeyBtn_LostFocus"
                                     PreviewKeyDown="RecordHotkeyBtn_PreviewKeyDown" />
                         </Grid>
 
