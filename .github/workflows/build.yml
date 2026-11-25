@@ -1,0 +1,55 @@
+name: Build FluentClip Native AOT
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win-x64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish WinUI 3 Native AOT (Unpackaged Self-Contained x64)
+        shell: pwsh
+        run: |
+          dotnet publish FluentClip.csproj -c Release -r win-x64 -o publish --nologo
+
+      - name: Package Release Archive
+        shell: pwsh
+        run: |
+          if (!(Test-Path "publish/FluentClip.exe")) {
+            Write-Error "FluentClip.exe was not generated!"
+            exit 1
+          }
+          Remove-Item "publish/*.pdb" -ErrorAction SilentlyContinue
+          $exeSizeMb = [math]::Round((Get-Item "publish/FluentClip.exe").Length / 1MB, 2)
+          Write-Host "Native AOT FluentClip.exe size: $exeSizeMb MB"
+          Compress-Archive -Path "publish/*" -DestinationPath "FluentClip-win-x64.zip" -Force
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FluentClip-win-x64
+          path: FluentClip-win-x64.zip
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "v1.0.$env:GITHUB_RUN_NUMBER"
+          gh release create $tag FluentClip-win-x64.zip `
+            --title "FluentClip $tag (WinUI 3 + .NET 9 Native AOT x64)" `
+            --notes "Unpackaged Windows 11 WinUI 3 + .NET 9 Native AOT build. Extract FluentClip-win-x64.zip and run FluentClip.exe directly (Default Hotkey: Alt + V)."
