@@ -20,7 +20,7 @@ public sealed class CapturedImageResult
     public string SourceFilePath { get; init; } = string.Empty;
 }
 
-internal static unsafe class ClipboardImageHelper
+internal static class ClipboardImageHelper
 {
     private static readonly uint PngClipFormat = NativeMethods.RegisterClipboardFormatW("PNG");
     private static readonly uint MimePngClipFormat = NativeMethods.RegisterClipboardFormatW("image/png");
@@ -71,7 +71,7 @@ internal static unsafe class ClipboardImageHelper
         return (null, null, 0, 0);
     }
 
-    public static List<string> ReadFileDropListFromOpenClipboard()
+    public static unsafe List<string> ReadFileDropListFromOpenClipboard()
     {
         var result = new List<string>();
         if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
@@ -395,7 +395,7 @@ internal static unsafe class ClipboardImageHelper
             {
                 int srcOffset = (h - 1 - y) * stride;
                 int dstOffset = 40 + y * stride;
-                Buffer.BlockCopy(topDownBgra, srcOffset, dib, dstOffset, stride);
+                System.Buffer.BlockCopy(topDownBgra, srcOffset, dib, dstOffset, stride);
             }
 
             return dib;
@@ -437,7 +437,7 @@ internal static unsafe class ClipboardImageHelper
         }
     }
 
-    public static void WriteFileDropListToOpenClipboard(IReadOnlyList<string> paths)
+    public static unsafe void WriteFileDropListToOpenClipboard(IReadOnlyList<string> paths)
     {
         if (paths.Count == 0) return;
 

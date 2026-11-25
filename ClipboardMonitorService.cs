@@ -7,7 +7,7 @@ using Microsoft.UI.Dispatching;
 
 namespace FluentClip;
 
-public sealed unsafe class ClipboardMonitorService : IDisposable
+public sealed class ClipboardMonitorService : IDisposable
 {
     private const int HotkeyId = 0x2026;
     private const uint TrayUid = 1001;
@@ -54,7 +54,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         MsgShowPopupFromSecondInstance = NativeMethods.RegisterWindowMessageW("FluentClip_ShowPopup_IPC");
     }
 
-    public void Start()
+    public unsafe void Start()
     {
         string className = "FluentClip_HiddenHostWindow";
         nint hInstance = NativeMethods.GetModuleHandleW(null);
@@ -111,7 +111,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         }
     }
 
-    private void CreateTrayIcon()
+    private unsafe void CreateTrayIcon()
     {
         _trayIcon = NativeMethods.CreateFluentTrayIcon();
 
@@ -129,7 +129,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         _trayAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_ADD, ref nid);
     }
 
-    public void UpdateTrayTooltip()
+    public unsafe void UpdateTrayTooltip()
     {
         if (!_trayAdded || _hwnd == 0) return;
 
@@ -144,7 +144,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_MODIFY, ref nid);
     }
 
-    private static void WriteFixedString(char* dest, int capacity, string text)
+    private static unsafe void WriteFixedString(char* dest, int capacity, string text)
     {
         int len = Math.Min(text.Length, capacity - 1);
         text.AsSpan(0, len).CopyTo(new Span<char>(dest, capacity));
@@ -478,7 +478,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         return true;
     }
 
-    private static void WriteUnicodeTextToOpenClipboard(string text)
+    private static unsafe void WriteUnicodeTextToOpenClipboard(string text)
     {
         int byteLen = (text.Length + 1) * 2;
         nint hGlobal = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE, (nuint)byteLen);
@@ -508,7 +508,7 @@ public sealed unsafe class ClipboardMonitorService : IDisposable
         }
     }
 
-    public void Dispose()
+    public unsafe void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
