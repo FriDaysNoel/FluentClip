@@ -32,11 +32,13 @@ public sealed class ClipboardMonitorService : IDisposable
     private readonly uint _fmtCanIncludeHistory;
     private readonly uint _fmtInternalWrite;
     public readonly uint MsgShowPopupFromSecondInstance;
+    private readonly uint _msgTaskbarCreated;
 
     public bool IsPaused { get; set; }
     public nint LastExternalForegroundWindow { get; private set; }
 
     public event Action? TogglePopupRequested;
+    public event Action? TrayIconClicked;
     public event Action? ShowPopupRequested;
     public event Action? OpenSettingsRequested;
     public event Action? ExitRequested;
@@ -52,6 +54,8 @@ public sealed class ClipboardMonitorService : IDisposable
         _fmtCanIncludeHistory = NativeMethods.RegisterClipboardFormatW("CanIncludeInClipboardHistory");
         _fmtInternalWrite = NativeMethods.RegisterClipboardFormatW("FluentClip_InternalWrite");
         MsgShowPopupFromSecondInstance = NativeMethods.RegisterWindowMessageW("FluentClip_ShowPopup_IPC");
+        // Broadcast by Explorer when the taskbar is (re)created; tray icons must be re-added or they vanish.
+        _msgTaskbarCreated = NativeMethods.RegisterWindowMessageW("TaskbarCreated");
     }
 
     public unsafe void Start()
@@ -95,13 +99,28 @@ public sealed class ClipboardMonitorService : IDisposable
 
         uint mods = _storage.Config.HotkeyModifiers | NativeMethods.MOD_NOREPEAT;
         uint vk = _storage.Config.HotkeyVirtualKey;
-        return NativeMethods.RegisterHotKey(_hwnd, HotkeyId, mods, vk);
+        _hotkeyRegistered = NativeMethods.RegisterHotKey(_hwnd, HotkeyId, mods, vk);
+        return _hotkeyRegistered;
+    }
+
+    private bool _hotkeyRegistered;
+
+    // A hotkey already taken by another app used to fail silently at start-up: the popup just never opened.
+    private string BuildTrayTip()
+    {
+        string hotkey = _storage.Config.HotkeyDisplay;
+        string status = IsPaused ? "已暂停"
+            : _hotkeyRegistered ? hotkey
+            : $"快捷键 {hotkey} 被占用，请在设置中更换";
+        return $"FluentClip 剪贴板 ({status})";
     }
 
     public void SnapshotForegroundBeforePopup(nint ownPopupHwnd, nint ownSettingsHwnd)
     {
         nint fg = NativeMethods.GetForegroundWindow();
-        if (fg != 0 && fg != _hwnd && fg != ownPopupHwnd && fg != ownSettingsHwnd)
+        // Opening from the tray makes the taskbar the foreground window; remembering it sent the paste
+        // (Ctrl+V) to the taskbar. Keep the previously remembered app window instead.
+        if (fg != 0 && fg != _hwnd && fg != ownPopupHwnd && fg != ownSettingsHwnd && !NativeMethods.IsShellTrayWindow(fg))
         {
             NativeMethods.GetWindowThreadProcessId(fg, out uint pid);
             if (pid != (uint)Environment.ProcessId)
@@ -113,7 +132,10 @@ public sealed class ClipboardMonitorService : IDisposable
 
     private unsafe void CreateTrayIcon()
     {
-        _trayIcon = NativeMethods.CreateFluentTrayIcon();
+        if (_trayIcon == 0)
+            _trayIcon = NativeMethods.LoadSmallIconFromFile(App.IconPath);
+        if (_trayIcon == 0)
+            _trayIcon = NativeMethods.CreateFluentTrayIcon();
 
         NativeMethods.NOTIFYICONDATAW nid = default;
         nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
@@ -123,10 +145,19 @@ public sealed class ClipboardMonitorService : IDisposable
         nid.uCallbackMessage = NativeMethods.WM_TRAYICON;
         nid.hIcon = _trayIcon;
 
-        string tip = $"FluentClip 剪贴板 ({_storage.Config.HotkeyDisplay})";
-        WriteFixedString(nid.szTip, 128, tip);
+        WriteFixedString(nid.szTip, 128, BuildTrayTip());
 
         _trayAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_ADD, ref nid);
+    }
+
+    private unsafe void RemoveTrayIcon()
+    {
+        NativeMethods.NOTIFYICONDATAW nid = default;
+        nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
+        nid.hWnd = _hwnd;
+        nid.uID = TrayUid;
+        NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_DELETE, ref nid);
+        _trayAdded = false;
     }
 
     public unsafe void UpdateTrayTooltip()
@@ -139,8 +170,7 @@ public sealed class ClipboardMonitorService : IDisposable
         nid.uID = TrayUid;
         nid.uFlags = NativeMethods.NIF_TIP;
 
-        string status = IsPaused ? "已暂停" : _storage.Config.HotkeyDisplay;
-        WriteFixedString(nid.szTip, 128, $"FluentClip 剪贴板 ({status})");
+        WriteFixedString(nid.szTip, 128, BuildTrayTip());
         NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_MODIFY, ref nid);
     }
 
@@ -153,9 +183,32 @@ public sealed class ClipboardMonitorService : IDisposable
 
     private nint WndProc(nint hWnd, uint msg, nint wParam, nint lParam)
     {
+        // Exceptions cannot unwind through the native window-procedure frame; they would terminate the process.
+        try
+        {
+            return WndProcCore(hWnd, msg, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            App.LogError($"WndProc 0x{msg:X4}", ex);
+            return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
+        }
+    }
+
+    private nint WndProcCore(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
         if (msg == MsgShowPopupFromSecondInstance && MsgShowPopupFromSecondInstance != 0)
         {
             _dispatcher.TryEnqueue(() => ShowPopupRequested?.Invoke());
+            return 0;
+        }
+
+        if (msg == _msgTaskbarCreated && _msgTaskbarCreated != 0)
+        {
+            // Normally the old icon died with the old taskbar, but delete first in case it survived
+            // (otherwise NIM_ADD fails and the icon is left un-updatable and un-removable).
+            RemoveTrayIcon();
+            CreateTrayIcon();
             return 0;
         }
 
@@ -172,15 +225,28 @@ public sealed class ClipboardMonitorService : IDisposable
             case NativeMethods.WM_CLIPBOARDUPDATE:
                 if (!IsPaused)
                 {
-                    _dispatcher.TryEnqueue(async () => await CaptureCurrentClipboardAsync());
+                    _dispatcher.TryEnqueue(async () =>
+                    {
+                        try
+                        {
+                            await CaptureCurrentClipboardAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            // async-void lambda: an escaping exception would take down the whole app
+                            App.LogError("CaptureClipboard", ex);
+                        }
+                    });
                 }
                 return 0;
 
             case NativeMethods.WM_TRAYICON:
                 uint mouseMsg = (uint)(lParam & 0xFFFF);
-                if (mouseMsg == NativeMethods.WM_LBUTTONUP || mouseMsg == NativeMethods.WM_LBUTTONDBLCLK)
+                // Only WM_LBUTTONUP: a double-click delivers UP, DBLCLK, UP, so also handling DBLCLK
+                // toggled the popup three times (open → close → open flicker).
+                if (mouseMsg == NativeMethods.WM_LBUTTONUP)
                 {
-                    _dispatcher.TryEnqueue(() => TogglePopupRequested?.Invoke());
+                    _dispatcher.TryEnqueue(() => TrayIconClicked?.Invoke());
                     return 0;
                 }
                 if (mouseMsg == NativeMethods.WM_RBUTTONUP || mouseMsg == NativeMethods.WM_CONTEXTMENU)
@@ -224,6 +290,9 @@ public sealed class ClipboardMonitorService : IDisposable
                 _hwnd,
                 0);
 
+            // Documented TrackPopupMenu quirk: without this the menu may not close when clicking elsewhere.
+            NativeMethods.PostMessageW(_hwnd, NativeMethods.WM_NULL, 0, 0);
+
             switch ((uint)cmd)
             {
                 case CmdOpenPopup:
@@ -241,7 +310,7 @@ public sealed class ClipboardMonitorService : IDisposable
                     _dispatcher.TryEnqueue(() => PauseStateChanged?.Invoke());
                     break;
                 case CmdClearUnpinned:
-                    _storage.ClearUnpinned();
+                    _dispatcher.TryEnqueue(() => _storage.ClearUnpinned());
                     break;
                 case CmdExitApp:
                     _dispatcher.TryEnqueue(() => ExitRequested?.Invoke());
@@ -412,7 +481,7 @@ public sealed class ClipboardMonitorService : IDisposable
 
             if (pasteAsFile)
             {
-                fileDropPaths = new List<string> { rawPath };
+                fileDropPaths = new List<string> { GetPasteableImageFilePath(record, rawPath) };
             }
             else
             {
@@ -468,7 +537,7 @@ public sealed class ClipboardMonitorService : IDisposable
         _storage.TouchItem(record.Id);
 
         // Restore focus to target window & synthesize Ctrl+V seamlessly
-        if (LastExternalForegroundWindow != 0)
+        if (LastExternalForegroundWindow != 0 && NativeMethods.IsWindow(LastExternalForegroundWindow))
         {
             NativeMethods.SetForegroundWindow(LastExternalForegroundWindow);
         }
@@ -476,6 +545,36 @@ public sealed class ClipboardMonitorService : IDisposable
         await Task.Delay(40);
         NativeMethods.SendCtrlV();
         return true;
+    }
+
+    /// <summary>
+    /// Pasting the cache file itself dropped a "3fa9c0…e1.png" (SHA-256 name) onto the desktop/folder.
+    /// Prefer the original file the image was copied from; otherwise hand out a readably named temp copy.
+    /// </summary>
+    private static string GetPasteableImageFilePath(ClipRecord record, string rawPath)
+    {
+        foreach (string original in record.FilePaths)
+        {
+            if (File.Exists(original))
+                return original;
+        }
+
+        try
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "FluentClip");
+            Directory.CreateDirectory(dir);
+            var created = DateTimeOffset.FromUnixTimeMilliseconds(record.CreatedUnixMs).ToLocalTime();
+            string shortHash = record.ImageHash.Length >= 6 ? record.ImageHash[..6] : record.ImageHash;
+            string friendly = Path.Combine(dir, $"FluentClip_{created:yyyyMMdd_HHmmss}_{shortHash}.png");
+            if (!File.Exists(friendly))
+                File.Copy(rawPath, friendly);
+            return friendly;
+        }
+        catch (Exception ex)
+        {
+            App.LogError("GetPasteableImageFilePath", ex);
+            return rawPath;
+        }
     }
 
     private static unsafe void WriteUnicodeTextToOpenClipboard(string text)
@@ -519,14 +618,7 @@ public sealed class ClipboardMonitorService : IDisposable
             NativeMethods.RemoveClipboardFormatListener(_hwnd);
 
             if (_trayAdded)
-            {
-                NativeMethods.NOTIFYICONDATAW nid = default;
-                nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
-                nid.hWnd = _hwnd;
-                nid.uID = TrayUid;
-                NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_DELETE, ref nid);
-                _trayAdded = false;
-            }
+                RemoveTrayIcon();
 
             NativeMethods.DestroyWindow(_hwnd);
             _hwnd = 0;

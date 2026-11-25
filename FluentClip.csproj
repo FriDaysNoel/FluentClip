@@ -6,6 +6,9 @@
     <RootNamespace>FluentClip</RootNamespace>
     <AssemblyName>FluentClip</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Embedded in the exe: Explorer, the Start menu shortcut and the taskbar show it. -->
+    <ApplicationIcon>Assets\FluentClip.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
@@ -23,8 +26,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="Assets\FluentClip.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\AppIcon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.*" />
-    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.2.*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
   </ItemGroup>
 </Project>

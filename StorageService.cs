@@ -23,6 +23,10 @@ public sealed class StorageService
 
     private HistoryDatabase _db = new();
 
+    // GetStats enumerates every cached PNG; the popup calls it on each refresh (every search keystroke).
+    // Every mutation goes through SaveHistoryDatabaseInternal / LoadHistoryDatabase, which reset this.
+    private CacheStats? _statsCache;
+
     public BootstrapConfig Config { get; private set; } = new();
 
     public event Action? HistoryChanged;
@@ -81,17 +85,52 @@ public sealed class StorageService
 
     public void SaveBootstrapConfig()
     {
-        Directory.CreateDirectory(_bootstrapDir);
-        string tmp = _bootstrapPath + ".tmp";
-        string json = JsonSerializer.Serialize(Config, AppJsonContext.Default.BootstrapConfig);
-        File.WriteAllText(tmp, json, Encoding.UTF8);
-        File.Move(tmp, _bootstrapPath, overwrite: true);
-        ApplyAutoStartSetting(Config.AutoStartOnBoot);
+        WriteBootstrapConfigFile();
         ConfigChanged?.Invoke();
+    }
+
+    // Writes config to disk without raising ConfigChanged (safe to call from a background thread).
+    private void WriteBootstrapConfigFile()
+    {
+        try
+        {
+            Directory.CreateDirectory(_bootstrapDir);
+            string tmp = _bootstrapPath + ".tmp";
+            string json = JsonSerializer.Serialize(Config, AppJsonContext.Default.BootstrapConfig);
+            File.WriteAllText(tmp, json, Encoding.UTF8);
+            MoveWithRetry(tmp, _bootstrapPath);
+        }
+        catch (Exception ex)
+        {
+            App.LogError("SaveBootstrapConfig", ex);
+        }
+        ApplyAutoStartSetting(Config.AutoStartOnBoot);
+    }
+
+    // Antivirus / indexer / backup tools can briefly lock the target file; retry instead of crashing.
+    private static void MoveWithRetry(string source, string destination)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(source, destination, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(25);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(25);
+            }
+        }
     }
 
     private void LoadHistoryDatabase()
     {
+        _statsCache = null;
         if (!File.Exists(HistoryDbPath))
         {
             _db = new HistoryDatabase();
@@ -111,11 +150,20 @@ public sealed class StorageService
 
     private void SaveHistoryDatabaseInternal()
     {
-        EnsureCacheDirectories(CacheRoot);
-        string tmp = HistoryDbPath + ".tmp";
-        string json = JsonSerializer.Serialize(_db, AppJsonContext.Default.HistoryDatabase);
-        File.WriteAllText(tmp, json, Encoding.UTF8);
-        File.Move(tmp, HistoryDbPath, overwrite: true);
+        _statsCache = null;
+        try
+        {
+            EnsureCacheDirectories(CacheRoot);
+            string tmp = HistoryDbPath + ".tmp";
+            string json = JsonSerializer.Serialize(_db, AppJsonContext.Default.HistoryDatabase);
+            File.WriteAllText(tmp, json, Encoding.UTF8);
+            MoveWithRetry(tmp, HistoryDbPath);
+        }
+        catch (Exception ex)
+        {
+            // In-memory history stays intact; the next successful save persists it.
+            App.LogError("SaveHistoryDatabase", ex);
+        }
     }
 
     public IReadOnlyList<ClipRecord> QueryItems(string searchText, string category)
@@ -153,9 +201,13 @@ public sealed class StorageService
         }
     }
 
+    // history.json is rewritten on every change, so one multi-megabyte paste (a log file, a minified bundle)
+    // would make every later copy slow. Such texts are not recorded.
+    private const int MaxTextClipChars = 1_000_000;
+
     public async Task AddTextClipAsync(string text, string sourceApp)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text) || text.Length > MaxTextClipChars) return;
 
         string hash = ComputeSha256(Encoding.UTF8.GetBytes(text));
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -211,10 +263,12 @@ public sealed class StorageService
             string rawPath = GetRawImagePath(imgHash);
             string thumbPath = GetThumbImagePath(imgHash);
 
+            // Synchronous writes on purpose: awaiting while holding _ioLock on the UI thread deadlocks
+            // if the UI thread meanwhile blocks in _ioLock.Wait() (e.g. QueryItems when the popup opens).
             if (!File.Exists(rawPath))
-                await File.WriteAllBytesAsync(rawPath, img.PngBytes);
+                File.WriteAllBytes(rawPath, img.PngBytes);
             if (!File.Exists(thumbPath))
-                await File.WriteAllBytesAsync(thumbPath, img.ThumbnailPngBytes);
+                File.WriteAllBytes(thumbPath, img.ThumbnailPngBytes);
 
             var existing = _db.Items.FirstOrDefault(x => x.Kind == ClipKind.Image && x.ImageHash == imgHash);
             if (existing != null)
@@ -403,12 +457,14 @@ public sealed class StorageService
             _db.Items = kept;
         }
 
-        // 2. Trim by MaxCacheSizeMb (protecting pinned items)
+        // 2. Trim by MaxCacheSizeMb (protecting pinned items).
+        // Only image records count toward the size quota, so only image records may be evicted here;
+        // evicting text/file records would delete history without freeing any image space.
         if (Config.MaxCacheSizeMb > 0)
         {
             long maxBytes = (long)Config.MaxCacheSizeMb * 1024L * 1024L;
             var unpinnedOldest = _db.Items
-                .Where(x => !x.IsPinned)
+                .Where(x => !x.IsPinned && x.Kind == ClipKind.Image)
                 .OrderBy(x => x.UpdatedUnixMs)
                 .ToList();
 
@@ -422,10 +478,7 @@ public sealed class StorageService
             {
                 var victim = unpinnedOldest[idx++];
                 _db.Items.Remove(victim);
-                if (victim.Kind == ClipKind.Image)
-                {
-                    totalImageBytes -= victim.ByteSize;
-                }
+                totalImageBytes -= victim.ByteSize;
             }
         }
 
@@ -480,7 +533,30 @@ public sealed class StorageService
             return (true, "新目录与当前缓存目录相同。");
         }
 
-        await _ioLock.WaitAsync();
+        // Cleanup below deletes <old>\images recursively; a target inside it would be wiped right after migrating.
+        string oldImagesPrefix = Path.Combine(oldDir, "images").TrimEnd('\\') + "\\";
+        if ((fullNewDir.TrimEnd('\\') + "\\").StartsWith(oldImagesPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "新目录不能位于当前缓存的 images 子目录内。");
+        }
+
+        // The whole locked section runs on a worker thread. Awaiting while holding _ioLock on the UI thread
+        // would deadlock as soon as the UI thread calls a synchronous _ioLock.Wait() (e.g. opening the popup).
+        var result = await Task.Run(() => MigrateCacheDirectoryCore(oldDir, fullNewDir, migrateData));
+
+        if (result.Success)
+        {
+            // Back on the UI thread: subscribers of ConfigChanged touch XAML elements directly.
+            ConfigChanged?.Invoke();
+            HistoryChanged?.Invoke();
+        }
+        return result;
+    }
+
+    private (bool Success, string Message) MigrateCacheDirectoryCore(string oldDir, string fullNewDir, bool migrateData)
+    {
+        _ioLock.Wait();
+        string previousDir = Config.CacheDirectory;
         try
         {
             EnsureCacheDirectories(fullNewDir);
@@ -488,20 +564,17 @@ public sealed class StorageService
             if (migrateData)
             {
                 SaveHistoryDatabaseInternal();
-                await Task.Run(() =>
+                if (File.Exists(HistoryDbPath))
                 {
-                    if (File.Exists(HistoryDbPath))
-                    {
-                        File.Copy(HistoryDbPath, Path.Combine(fullNewDir, "history.json"), overwrite: true);
-                    }
+                    File.Copy(HistoryDbPath, Path.Combine(fullNewDir, "history.json"), overwrite: true);
+                }
 
-                    CopyPngDirectory(RawImagesDir, Path.Combine(fullNewDir, "images", "raw"));
-                    CopyPngDirectory(ThumbImagesDir, Path.Combine(fullNewDir, "images", "thumbs"));
-                });
+                CopyPngDirectory(RawImagesDir, Path.Combine(fullNewDir, "images", "raw"));
+                CopyPngDirectory(ThumbImagesDir, Path.Combine(fullNewDir, "images", "thumbs"));
             }
 
             Config.CacheDirectory = fullNewDir;
-            SaveBootstrapConfig();
+            WriteBootstrapConfigFile();
             LoadHistoryDatabase();
 
             if (migrateData && Directory.Exists(oldDir))
@@ -522,6 +595,13 @@ public sealed class StorageService
         }
         catch (Exception ex)
         {
+            // Roll back so the app keeps using the old (still intact) cache directory.
+            if (!string.Equals(Config.CacheDirectory, previousDir, StringComparison.OrdinalIgnoreCase))
+            {
+                Config.CacheDirectory = previousDir;
+                WriteBootstrapConfigFile();
+                LoadHistoryDatabase();
+            }
             return (false, $"迁移缓存目录失败: {ex.Message}");
         }
         finally
@@ -529,7 +609,6 @@ public sealed class StorageService
             _ioLock.Release();
         }
 
-        HistoryChanged?.Invoke();
         return (true, migrateData ? "已成功迁移全部历史与图片缓存至新目录！" : "已切换至新缓存目录！");
     }
 
@@ -549,6 +628,8 @@ public sealed class StorageService
         _ioLock.Wait();
         try
         {
+            if (_statsCache != null) return _statsCache;
+
             long imgBytes = 0;
             if (Directory.Exists(RawImagesDir))
             {
@@ -567,7 +648,7 @@ public sealed class StorageService
 
             long dbBytes = File.Exists(HistoryDbPath) ? new FileInfo(HistoryDbPath).Length : 0;
 
-            return new CacheStats
+            return _statsCache = new CacheStats
             {
                 CacheDirectory = CacheRoot,
                 TotalItems = _db.Items.Count,

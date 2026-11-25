@@ -3,10 +3,15 @@ name: Build FluentClip Native AOT
 on:
   push:
     branches: [ "main", "master" ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-win-x64:
@@ -14,17 +19,18 @@ jobs:
 
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET 9 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0.x'
 
       - name: Publish WinUI 3 Native AOT (Unpackaged Self-Contained x64)
         shell: pwsh
         run: |
-          dotnet publish FluentClip.csproj -c Release -r win-x64 -o publish --nologo
+          # Version matches the release tag (v1.0.<run number>) so the About page shows the real build.
+          dotnet publish FluentClip.csproj -c Release -r win-x64 -o publish --nologo -p:Version=1.0.${{ github.run_number }}
 
       - name: Package Release Archive
         shell: pwsh
@@ -39,17 +45,20 @@ jobs:
           Compress-Archive -Path "publish/*" -DestinationPath "FluentClip-win-x64.zip" -Force
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: FluentClip-win-x64
           path: FluentClip-win-x64.zip
 
+      # Pull requests only build + upload the artifact; releases come from pushes to main/master or manual runs.
       - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
           $tag = "v1.0.$env:GITHUB_RUN_NUMBER"
           gh release create $tag FluentClip-win-x64.zip `
+            --target $env:GITHUB_SHA `
             --title "FluentClip $tag (WinUI 3 + .NET 9 Native AOT x64)" `
             --notes "Unpackaged Windows 11 WinUI 3 + .NET 9 Native AOT build. Extract FluentClip-win-x64.zip and run FluentClip.exe directly (Default Hotkey: Alt + V)."

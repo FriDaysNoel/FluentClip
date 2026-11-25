@@ -54,6 +54,10 @@ public sealed class BootstrapConfig
     public int MaxHistoryCount { get; set; } = 500;
     public bool FollowCursorOrCaret { get; set; } = true;
     public bool AutoStartOnBoot { get; set; } = false;
+
+    // Unpackaged app: without a shortcut in the Start menu Programs folder it never shows up in Start / search.
+    public bool ShowInStartMenu { get; set; } = true;
+    public string StartMenuShortcutTarget { get; set; } = string.Empty;
     public string ThemeMode { get; set; } = "System"; // System, Dark, Light
 }
 

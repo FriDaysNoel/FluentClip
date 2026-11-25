@@ -1,5 +1,8 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -19,32 +22,74 @@ public sealed partial class App : Application
     public App()
     {
         Instance = this;
+
+        // Registered before InitializeComponent so XAML start-up failures are logged too.
+        // A background tray app must not die from one bad clipboard payload or a locked file.
         UnhandledException += (_, e) =>
         {
-            try
-            {
-                string logDir = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "FluentClip");
-                System.IO.Directory.CreateDirectory(logDir);
-                System.IO.File.WriteAllText(
-                    System.IO.Path.Combine(logDir, "crash.log"),
-                    $"{DateTime.Now:O}\n{e.Message}\n{e.Exception}");
-            }
-            catch { }
+            LogError($"UnhandledException: {e.Message}", e.Exception);
+            e.Handled = true;
         };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LogError("UnobservedTaskException", e.Exception);
+            e.SetObserved();
+        };
+
         InitializeComponent();
+    }
+
+    /// <summary>Multi-size icon shipped next to the exe (also embedded via ApplicationIcon).</summary>
+    public static string IconPath => Path.Combine(AppContext.BaseDirectory, "Assets", "FluentClip.ico");
+
+    public static void TrySetWindowIcon(Microsoft.UI.Windowing.AppWindow appWindow)
+    {
+        try
+        {
+            if (File.Exists(IconPath))
+                appWindow.SetIcon(IconPath);
+        }
+        catch (Exception ex)
+        {
+            LogError("SetIcon", ex);
+        }
+    }
+
+    private static readonly object LogLock = new();
+
+    public static void LogError(string context, Exception? ex)
+    {
+        try
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FluentClip");
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "error.log");
+            lock (LogLock)
+            {
+                var fi = new FileInfo(path);
+                if (fi.Exists && fi.Length > 1024 * 1024)
+                    fi.Delete();
+                File.AppendAllText(path, $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {context}: {ex}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+        }
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // Single-instance check: if already running, tell the existing tray instance to pop open the HUD!
+        // Read the error via the marshaller (SetLastError=true); a separate GetLastError P/Invoke may see a clobbered value.
         _singleInstanceMutex = NativeMethods.CreateMutexW(0, true, @"Local\FluentClip_SingleInstance_Mutex_v1");
-        if (NativeMethods.GetLastError() == NativeMethods.ERROR_ALREADY_EXISTS)
+        if (Marshal.GetLastPInvokeError() == NativeMethods.ERROR_ALREADY_EXISTS)
         {
             uint showMsg = NativeMethods.RegisterWindowMessageW("FluentClip_ShowPopup_IPC");
             if (showMsg != 0)
             {
+                // We (the process the user just launched) own the foreground right; hand it over so the running
+                // instance's SetForegroundWindow succeeds and the popup actually gets keyboard focus.
+                NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
                 NativeMethods.PostMessageW(NativeMethods.HWND_BROADCAST, showMsg, 0, 0);
             }
             Environment.Exit(0);
@@ -54,8 +99,12 @@ public sealed partial class App : Application
         Storage = new StorageService();
         Storage.Initialize();
 
+        if (StartMenuShortcut.Sync(Storage.Config))
+            Storage.SaveBootstrapConfig();
+
         Monitor = new ClipboardMonitorService(Storage, DispatcherQueue.GetForCurrentThread());
         Monitor.TogglePopupRequested += TogglePopup;
+        Monitor.TrayIconClicked += OnTrayIconClicked;
         Monitor.ShowPopupRequested += ShowPopup;
         Monitor.OpenSettingsRequested += ShowSettings;
         Monitor.ExitRequested += ExitApplication;
@@ -88,6 +137,17 @@ public sealed partial class App : Application
         {
             ShowPopup();
         }
+    }
+
+    private void OnTrayIconClicked()
+    {
+        if (_popupWindow == null) return;
+
+        // The click on the taskbar already hid the popup via deactivation: treat it as "close", don't re-open.
+        if (!_popupWindow.IsPopupVisible && _popupWindow.WasJustHiddenByDeactivation)
+            return;
+
+        TogglePopup();
     }
 
     public void ShowPopup()

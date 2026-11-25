@@ -35,6 +35,21 @@ public sealed partial class MainWindow : Window
     private readonly List<Border> _cardBorders = new();
     private int _selectedIndex = -1;
     private ClipRecord? _lightboxItem;
+    private long _hiddenByDeactivationAtMs = long.MinValue;
+    private bool _hoverSelectionArmed;
+    private NativeMethods.POINT _cursorAtShow;
+
+    // Decoded thumbnails keyed by image hash, so typing in the search box doesn't re-read and re-decode
+    // up to 80 PNG files per keystroke (which also made thumbnails flicker).
+    private readonly Dictionary<string, Microsoft.UI.Xaml.Media.Imaging.BitmapImage> _thumbCache = new();
+    private const int MaxThumbCacheEntries = 300;
+
+    /// <summary>
+    /// True right after the popup auto-hid because it lost focus. Clicking the tray icon while the popup is open
+    /// first deactivates it (hiding it) and only then delivers the click; without this check that click
+    /// re-opened the popup, so the tray icon could never close it.
+    /// </summary>
+    public bool WasJustHiddenByDeactivation => Environment.TickCount64 - _hiddenByDeactivationAtMs < 400;
 
     public MainWindow()
     {
@@ -57,8 +72,10 @@ public sealed partial class MainWindow : Window
         presenter.IsAlwaysOnTop = true;
         presenter.IsMaximizable = false;
         presenter.IsMinimizable = false;
+        presenter.IsResizable = false; // fixed-size HUD; its size is recomputed every time it opens
         presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
 
+        App.TrySetWindowIcon(_appWindow);
         _appWindow.IsShownInSwitchers = false;
         _appWindow.Closing += OnAppWindowClosing;
         NativeMethods.ApplyRoundedCorners(Hwnd);
@@ -94,6 +111,9 @@ public sealed partial class MainWindow : Window
         {
             CloseLightbox();
             PauseToggleBtn.IsChecked = App.Monitor.IsPaused;
+
+            _hoverSelectionArmed = false;
+            NativeMethods.GetCursorPos(out _cursorAtShow);
 
             bool followCaret = App.Storage.Config.FollowCursorOrCaret;
             var bounds = NativeMethods.CalculateClampedPopupBounds(Hwnd, PopupLogicalWidth, PopupLogicalHeight, followCaret);
@@ -149,6 +169,7 @@ public sealed partial class MainWindow : Window
             if (!_isPastingOrTransitioning && IsPopupVisible && PinWindowBtn.IsChecked != true)
             {
                 HidePopup();
+                _hiddenByDeactivationAtMs = Environment.TickCount64;
             }
         }
     }
@@ -188,6 +209,7 @@ public sealed partial class MainWindow : Window
         }
 
         EmptyStatePanel.Visibility = Visibility.Collapsed;
+        _selectedIndex = -1;
 
         int renderCount = Math.Min(allMatches.Count, MaxRenderedCards);
         for (int i = 0; i < renderCount; i++)
@@ -196,6 +218,20 @@ public sealed partial class MainWindow : Window
             Border card = BuildClipCard(item, i);
             _cardBorders.Add(card);
             CardsStack.Children.Add(card);
+        }
+
+        // Records past the render cap were silently unreachable; say so and point to search.
+        if (allMatches.Count > renderCount)
+        {
+            CardsStack.Children.Add(new TextBlock
+            {
+                Text = $"仅显示最近 {renderCount} 条（共 {allMatches.Count} 条），输入关键词可搜索更早的记录",
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 4, 0, 2),
+                Style = GetLocalStyle("TertiaryTextStyle")
+            });
         }
 
         SelectCard(0, scrollIntoView: false);
@@ -208,8 +244,7 @@ public sealed partial class MainWindow : Window
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(11, 9, 11, 9),
             BorderThickness = new Thickness(1.2),
-            Background = GetThemeBrush("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
+            Style = GetLocalStyle("ClipCardStyle"),
             Tag = index
         };
 
@@ -228,13 +263,13 @@ public sealed partial class MainWindow : Window
             {
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(5, 1, 5, 1),
-                Background = GetThemeBrush("SubtleFillColorSecondaryBrush"),
+                Style = GetLocalStyle("SubtleBadgeStyle"),
                 Child = new TextBlock
                 {
                     Text = $"{index + 1}",
                     FontSize = 10,
                     FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                    Foreground = GetThemeBrush("TextFillColorSecondaryBrush")
+                    Style = GetLocalStyle("SecondaryTextStyle")
                 }
             };
             leftMeta.Children.Add(indexBadge);
@@ -257,14 +292,7 @@ public sealed partial class MainWindow : Window
             Background = item.Kind == ClipKind.Image
                 ? new SolidColorBrush(Color.FromArgb(36, 14, 165, 233))
                 : new SolidColorBrush(Color.FromArgb(28, 99, 102, 241)),
-            Child = new TextBlock
-            {
-                Text = kindLabel,
-                FontSize = 10.5,
-                Foreground = item.Kind == ClipKind.Image
-                    ? new SolidColorBrush(Color.FromArgb(255, 56, 189, 248))
-                    : GetThemeBrush("TextFillColorSecondaryBrush")
-            }
+            Child = CreateKindLabel(kindLabel, item.Kind == ClipKind.Image)
         };
         leftMeta.Children.Add(kindBadge);
 
@@ -278,7 +306,7 @@ public sealed partial class MainWindow : Window
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = GetThemeBrush("TextFillColorTertiaryBrush")
+            Style = GetLocalStyle("TertiaryTextStyle")
         });
 
         Grid.SetColumn(leftMeta, 0);
@@ -325,7 +353,7 @@ public sealed partial class MainWindow : Window
                 MaxHeight = 138,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 BorderThickness = new Thickness(1),
-                BorderBrush = GetThemeBrush("SurfaceStrokeColorDefaultBrush"),
+                Style = GetLocalStyle("SurfaceStrokeBorderStyle"),
                 Background = new SolidColorBrush(Color.FromArgb(24, 128, 128, 128)),
                 Padding = new Thickness(4)
             };
@@ -337,8 +365,7 @@ public sealed partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Left
             };
 
-            string thumbPath = App.Storage.GetThumbImagePath(item.ImageHash);
-            _ = LoadThumbnailIntoImageAsync(imgControl, thumbPath);
+            _ = LoadThumbnailIntoImageAsync(imgControl, item.ImageHash);
 
             imgFrame.Child = imgControl;
             bodyContainer.Child = imgFrame;
@@ -353,7 +380,7 @@ public sealed partial class MainWindow : Window
                 CornerRadius = new CornerRadius(5),
                 Background = new SolidColorBrush(swatchColor),
                 BorderThickness = new Thickness(1),
-                BorderBrush = GetThemeBrush("SurfaceStrokeColorDefaultBrush")
+                Style = GetLocalStyle("SurfaceStrokeBorderStyle")
             });
             colorRow.Children.Add(new TextBlock
             {
@@ -391,18 +418,54 @@ public sealed partial class MainWindow : Window
         outerStack.Children.Add(bodyContainer);
         card.Child = outerStack;
 
-        card.PointerEntered += (_, _) => SelectCard(index, scrollIntoView: false);
+        card.PointerMoved += (_, _) => OnCardPointerMoved(index);
 
         return card;
     }
 
-    private static async Task LoadThumbnailIntoImageAsync(Image target, string path)
+    // The popup opens next to the mouse, so the cursor usually already rests on some card. Selecting on
+    // PointerEntered moved the selection to that card at once, and Enter then pasted it instead of the newest
+    // item. Hover selection now starts only after the mouse has really moved since the popup opened.
+    private void OnCardPointerMoved(int index)
     {
-        var bmp = await ClipboardImageHelper.LoadUnlockedBitmapAsync(path);
+        if (!_hoverSelectionArmed)
+        {
+            NativeMethods.GetCursorPos(out NativeMethods.POINT pt);
+            if (Math.Abs(pt.X - _cursorAtShow.X) + Math.Abs(pt.Y - _cursorAtShow.Y) < 6)
+                return;
+            _hoverSelectionArmed = true;
+        }
+
+        if (index != _selectedIndex)
+            SelectCard(index, scrollIntoView: false);
+    }
+
+    private async Task LoadThumbnailIntoImageAsync(Image target, string imageHash)
+    {
+        if (_thumbCache.TryGetValue(imageHash, out var cached))
+        {
+            target.Source = cached;
+            return;
+        }
+
+        var bmp = await ClipboardImageHelper.LoadUnlockedBitmapAsync(App.Storage.GetThumbImagePath(imageHash));
         if (bmp != null)
         {
+            if (_thumbCache.Count >= MaxThumbCacheEntries)
+                _thumbCache.Clear();
+            _thumbCache[imageHash] = bmp;
             target.Source = bmp;
         }
+    }
+
+    private TextBlock CreateKindLabel(string text, bool isImage)
+    {
+        var label = new TextBlock { Text = text, FontSize = 10.5 };
+        if (isImage)
+            label.Foreground = new SolidColorBrush(Color.FromArgb(255, 56, 189, 248));
+        else
+            label.Style = GetLocalStyle("SecondaryTextStyle");
+        return label;
     }
 
     private static Button CreateMiniIconButton(string glyph, string tooltip, RoutedEventHandler onClick, Brush? customForeground = null)
@@ -437,15 +500,12 @@ public sealed partial class MainWindow : Window
         int clamped = Math.Clamp(index, 0, _cardBorders.Count - 1);
         if (_selectedIndex >= 0 && _selectedIndex < _cardBorders.Count)
         {
-            var prev = _cardBorders[_selectedIndex];
-            prev.BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush");
-            prev.Background = GetThemeBrush("CardBackgroundFillColorDefaultBrush");
+            _cardBorders[_selectedIndex].Style = GetLocalStyle("ClipCardStyle");
         }
 
         _selectedIndex = clamped;
         var current = _cardBorders[_selectedIndex];
-        current.BorderBrush = GetThemeBrush("AccentFillColorDefaultBrush");
-        current.Background = GetThemeBrush("CardBackgroundFillColorSecondaryBrush");
+        current.Style = GetLocalStyle("ClipCardSelectedStyle");
 
         if (scrollIntoView)
         {
@@ -600,34 +660,36 @@ public sealed partial class MainWindow : Window
 
     private static void SetTabVisual(Button btn, bool active)
     {
+        // The built-in accent style keeps proper hover/pressed states and follows the window theme;
+        // hard-coding Background/Foreground broke both.
         if (active)
         {
-            btn.Background = GetThemeBrush("AccentFillColorDefaultBrush");
-            btn.Foreground = new SolidColorBrush(Colors.White);
+            btn.Style = ToStyle(Application.Current.Resources.TryGetValue("AccentButtonStyle", out object? s) ? s : null);
             btn.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         }
         else
         {
-            btn.ClearValue(Control.BackgroundProperty);
-            btn.ClearValue(Control.ForegroundProperty);
+            btn.ClearValue(FrameworkElement.StyleProperty);
             btn.FontWeight = Microsoft.UI.Text.FontWeights.Normal;
         }
     }
 
-    private static Brush GetThemeBrush(string key)
+    private Style? GetLocalStyle(string key)
+    {
+        return ToStyle(RootGrid.Resources.TryGetValue(key, out object? obj) ? obj : null);
+    }
+
+    private static Style? ToStyle(object? obj)
     {
         try
         {
-            if (Application.Current.Resources.TryGetValue(key, out object? obj) && obj != null)
-            {
-                if (obj is Brush brush) return brush;
-                if (obj is IWinRTObject winRtObj) return winRtObj.As<Brush>();
-            }
+            if (obj is Style style) return style;
+            if (obj is IWinRTObject winRtObj) return winRtObj.As<Style>();
         }
         catch
         {
         }
-        return new SolidColorBrush(Colors.Transparent);
+        return null;
     }
 
     private void PauseToggleBtn_Click(object sender, RoutedEventArgs e)
