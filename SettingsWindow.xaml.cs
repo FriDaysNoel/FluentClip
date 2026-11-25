@@ -48,8 +48,11 @@ public sealed partial class SettingsWindow : Window
         WindowId wndId = Win32Interop.GetWindowIdFromWindow(Hwnd);
         _appWindow = AppWindow.GetFromWindowId(wndId);
 
-        CenterWindowOnMonitor(660, 720);
+        CenterWindowOnMonitor(980, 720);
         NativeMethods.ApplyRoundedCorners(Hwnd);
+        App.TrySetWindowIcon(_appWindow);
+
+        NavView.SelectedItem = NavView.MenuItems[0];
 
         Closed += (_, _) =>
         {
@@ -129,6 +132,60 @@ public sealed partial class SettingsWindow : Window
 
         FollowCaretSwitch.IsOn = cfg.FollowCursorOrCaret;
         AutoStartSwitch.IsOn = cfg.AutoStartOnBoot;
+        StartMenuSwitch.IsOn = cfg.ShowInStartMenu;
+
+        var version = typeof(SettingsWindow).Assembly.GetName().Version;
+        VersionText.Text = version != null ? $"版本 {version.Major}.{version.Minor}.{version.Build}" : "版本未知";
+    }
+
+    private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItem is not NavigationViewItem item) return;
+        string tag = item.Tag as string ?? "General";
+
+        GeneralPage.Visibility = tag == "General" ? Visibility.Visible : Visibility.Collapsed;
+        StoragePage.Visibility = tag == "Storage" ? Visibility.Visible : Visibility.Collapsed;
+        AboutPage.Visibility = tag == "About" ? Visibility.Visible : Visibility.Collapsed;
+        PageTitle.Text = item.Content as string ?? string.Empty;
+        StatusInfoBar.IsOpen = false;
+
+        if (tag == "Storage")
+            RefreshStorageMeter();
+    }
+
+    private void NavView_ItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
+    {
+        // Footer entry: the settings window used to be a dead end with no way back to the clipboard panel.
+        if (args.InvokedItemContainer is NavigationViewItem { Tag: "OpenPanel" })
+            App.Instance.ShowPopup();
+    }
+
+    private void StartMenuSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isLoadingUi) return;
+        App.Storage.Config.ShowInStartMenu = StartMenuSwitch.IsOn;
+        StartMenuShortcut.Sync(App.Storage.Config);
+        App.Storage.SaveBootstrapConfig();
+        ShowBanner(StartMenuSwitch.IsOn ? "已添加到开始菜单。" : "已从开始菜单移除。", InfoBarSeverity.Success);
+    }
+
+    private void OpenDataFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FluentClip");
+            System.IO.Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{dir}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            App.LogError("OpenDataFolder", ex);
+        }
     }
 
     private void RefreshStorageMeter()

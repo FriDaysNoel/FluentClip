@@ -374,6 +374,26 @@ internal static unsafe class NativeMethods
 
     public const uint ASFW_ANY = unchecked((uint)-1);
 
+    private const uint IMAGE_ICON = 1;
+    private const uint LR_LOADFROMFILE = 0x10;
+    private const int SM_CXSMICON = 49;
+    private const int SM_CYSMICON = 50;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadImageW(nint hInst, string name, uint type, int cx, int cy, uint fuLoad);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    /// <summary>Loads the tray-sized frame (16px at 100%, 24px at 150%, ...) of a multi-size .ico file.</summary>
+    public static nint LoadSmallIconFromFile(string path)
+    {
+        if (!File.Exists(path)) return 0;
+        int cx = GetSystemMetrics(SM_CXSMICON);
+        int cy = GetSystemMetrics(SM_CYSMICON);
+        return LoadImageW(0, path, IMAGE_ICON, cx > 0 ? cx : 16, cy > 0 ? cy : 16, LR_LOADFROMFILE);
+    }
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool AllowSetForegroundWindow(uint dwProcessId);

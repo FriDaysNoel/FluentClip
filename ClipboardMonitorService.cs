@@ -133,6 +133,8 @@ public sealed class ClipboardMonitorService : IDisposable
     private unsafe void CreateTrayIcon()
     {
         if (_trayIcon == 0)
+            _trayIcon = NativeMethods.LoadSmallIconFromFile(App.IconPath);
+        if (_trayIcon == 0)
             _trayIcon = NativeMethods.CreateFluentTrayIcon();
 
         NativeMethods.NOTIFYICONDATAW nid = default;

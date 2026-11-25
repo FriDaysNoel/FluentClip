@@ -29,7 +29,8 @@ jobs:
       - name: Publish WinUI 3 Native AOT (Unpackaged Self-Contained x64)
         shell: pwsh
         run: |
-          dotnet publish FluentClip.csproj -c Release -r win-x64 -o publish --nologo
+          # Version matches the release tag (v1.0.<run number>) so the About page shows the real build.
+          dotnet publish FluentClip.csproj -c Release -r win-x64 -o publish --nologo -p:Version=1.0.${{ github.run_number }}
 
       - name: Package Release Archive
         shell: pwsh

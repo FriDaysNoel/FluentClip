@@ -39,6 +39,22 @@ public sealed partial class App : Application
         InitializeComponent();
     }
 
+    /// <summary>Multi-size icon shipped next to the exe (also embedded via ApplicationIcon).</summary>
+    public static string IconPath => Path.Combine(AppContext.BaseDirectory, "Assets", "FluentClip.ico");
+
+    public static void TrySetWindowIcon(Microsoft.UI.Windowing.AppWindow appWindow)
+    {
+        try
+        {
+            if (File.Exists(IconPath))
+                appWindow.SetIcon(IconPath);
+        }
+        catch (Exception ex)
+        {
+            LogError("SetIcon", ex);
+        }
+    }
+
     private static readonly object LogLock = new();
 
     public static void LogError(string context, Exception? ex)
@@ -82,6 +98,9 @@ public sealed partial class App : Application
 
         Storage = new StorageService();
         Storage.Initialize();
+
+        if (StartMenuShortcut.Sync(Storage.Config))
+            Storage.SaveBootstrapConfig();
 
         Monitor = new ClipboardMonitorService(Storage, DispatcherQueue.GetForCurrentThread());
         Monitor.TogglePopupRequested += TogglePopup;

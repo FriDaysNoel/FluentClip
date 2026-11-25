@@ -75,6 +75,7 @@ public sealed partial class MainWindow : Window
         presenter.IsResizable = false; // fixed-size HUD; its size is recomputed every time it opens
         presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
 
+        App.TrySetWindowIcon(_appWindow);
         _appWindow.IsShownInSwitchers = false;
         _appWindow.Closing += OnAppWindowClosing;
         NativeMethods.ApplyRoundedCorners(Hwnd);
