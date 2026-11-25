@@ -1,0 +1,214 @@
+<Window
+    x:Class="FluentClip.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="FluentClip">
+
+    <Grid x:Name="RootGrid" KeyDown="RootGrid_KeyDown" Padding="12,10,12,10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Row 0: Sleek Header Bar (Draggable area + Quick Actions) -->
+        <Grid Grid.Row="0" Margin="2,0,2,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <Border Width="24" Height="24" CornerRadius="7" VerticalAlignment="Center">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#0EA5E9" Offset="0" />
+                            <GradientStop Color="#2563EB" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <FontIcon Glyph="&#xE8C8;" FontSize="13" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="FluentClip" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Border Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="9" Padding="7,2" VerticalAlignment="Center">
+                    <TextBlock x:Name="CountBadgeText" Text="0" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Border>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                <ToggleButton x:Name="PauseToggleBtn"
+                              Width="30" Height="28" Padding="0" CornerRadius="6"
+                              Background="Transparent" BorderThickness="0"
+                              ToolTipService.ToolTip="暂停 / 恢复剪贴板监听"
+                              Click="PauseToggleBtn_Click">
+                    <FontIcon Glyph="&#xE769;" FontSize="13" />
+                </ToggleButton>
+                <ToggleButton x:Name="PinWindowBtn"
+                              Width="30" Height="28" Padding="0" CornerRadius="6"
+                              Background="Transparent" BorderThickness="0"
+                              ToolTipService.ToolTip="固定浮窗（失去焦点不自动收起）"
+                              Click="PinWindowBtn_Click">
+                    <FontIcon Glyph="&#xE718;" FontSize="13" />
+                </ToggleButton>
+                <Button Width="30" Height="28" Padding="0" CornerRadius="6"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="清空未收藏历史"
+                        Click="ClearUnpinnedBtn_Click">
+                    <FontIcon Glyph="&#xE74D;" FontSize="13" />
+                </Button>
+                <Button Width="30" Height="28" Padding="0" CornerRadius="6"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="设置与缓存目录管理"
+                        Click="OpenSettingsBtn_Click">
+                    <FontIcon Glyph="&#xE713;" FontSize="13" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Row 1: Instant Search Box -->
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <TextBox x:Name="SearchBox"
+                     PlaceholderText="搜索文本、图片尺寸、颜色值或来源软件..."
+                     CornerRadius="8"
+                     Padding="32,6,10,6"
+                     FontSize="13"
+                     TextChanged="SearchBox_TextChanged"
+                     PreviewKeyDown="SearchBox_PreviewKeyDown" />
+            <FontIcon Glyph="&#xE721;"
+                      FontSize="13"
+                      Margin="11,0,0,0"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Center"
+                      IsHitTestVisible="False"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Grid>
+
+        <!-- Row 2: Category Segmented Filter Pills -->
+        <Grid Grid.Row="2" Margin="0,0,0,8" ColumnSpacing="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="TabAllBtn" Grid.Column="0" HorizontalAlignment="Stretch" Height="28" Padding="0" CornerRadius="7" FontSize="12" Content="全部" Click="FilterTab_Click" Tag="All" />
+            <Button x:Name="TabTextBtn" Grid.Column="1" HorizontalAlignment="Stretch" Height="28" Padding="0" CornerRadius="7" FontSize="12" Content="文本" Click="FilterTab_Click" Tag="Text" />
+            <Button x:Name="TabImageBtn" Grid.Column="2" HorizontalAlignment="Stretch" Height="28" Padding="0" CornerRadius="7" FontSize="12" Content="图片" Click="FilterTab_Click" Tag="Image" />
+            <Button x:Name="TabPinnedBtn" Grid.Column="3" HorizontalAlignment="Stretch" Height="28" Padding="0" CornerRadius="7" FontSize="12" Content="★ 收藏" Click="FilterTab_Click" Tag="Pinned" />
+        </Grid>
+
+        <!-- Row 3: Clip Cards List + Empty State -->
+        <Grid Grid.Row="3">
+            <ScrollViewer x:Name="CardsScrollViewer" VerticalScrollBarVisibility="Auto" Padding="0,0,2,0">
+                <StackPanel x:Name="CardsStack" Spacing="7" Padding="0,0,0,6" />
+            </ScrollViewer>
+
+            <StackPanel x:Name="EmptyStatePanel"
+                        Visibility="Collapsed"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="8">
+                <FontIcon Glyph="&#xE8C8;" FontSize="34" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center" />
+                <TextBlock x:Name="EmptyStateTitle"
+                           Text="剪贴板历史为空"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="EmptyStateSubtitle"
+                           Text="复制任意文字、截图或图片文件即可自动收录"
+                           FontSize="12"
+                           HorizontalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Row 4: Crisp Status & Shortcut Hints Footer -->
+        <Grid Grid.Row="4" Margin="2,8,2,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Enter 粘贴 · Shift+点击 粘为文件 · Alt+1~9 速粘"
+                       FontSize="11"
+                       VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            <HyperlinkButton Grid.Column="1"
+                             x:Name="CacheSizeFooterBtn"
+                             Padding="4,1"
+                             FontSize="11"
+                             Content="缓存 0 KB"
+                             ToolTipService.ToolTip="点击打开缓存目录设置"
+                             Click="OpenSettingsBtn_Click" />
+        </Grid>
+
+        <!-- Full-Resolution Image Lightbox Overlay -->
+        <Border x:Name="LightboxOverlay"
+                Grid.RowSpan="5"
+                Visibility="Collapsed"
+                Margin="-12,-10,-12,-10"
+                Padding="14"
+                CornerRadius="8"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+            <Grid RowSpacing="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LightboxMetaText"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                    <Button Grid.Column="1"
+                            Width="28" Height="28" Padding="0" CornerRadius="6"
+                            Click="CloseLightboxBtn_Click">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    </Button>
+                </Grid>
+
+                <Border Grid.Row="1"
+                        CornerRadius="8"
+                        Padding="6"
+                        BorderThickness="1"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}">
+                    <ScrollViewer ZoomMode="Enabled"
+                                  MinZoomFactor="0.5"
+                                  MaxZoomFactor="4.0"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto">
+                        <Image x:Name="LightboxImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </ScrollViewer>
+                </Border>
+
+                <Grid Grid.Row="2" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0"
+                            HorizontalAlignment="Stretch"
+                            Style="{StaticResource AccentButtonStyle}"
+                            CornerRadius="7"
+                            Content="立即粘贴图片"
+                            Click="LightboxPasteImageBtn_Click" />
+                    <Button Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            CornerRadius="7"
+                            Content="粘贴为 PNG 文件"
+                            Click="LightboxPasteFileBtn_Click" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
