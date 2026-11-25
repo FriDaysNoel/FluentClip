@@ -40,19 +40,24 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        SystemBackdrop = new DesktopAcrylicBackdrop();
+        if (Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported())
+        {
+            SystemBackdrop = new DesktopAcrylicBackdrop();
+        }
+        else if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+        {
+            SystemBackdrop = new MicaBackdrop();
+        }
 
         Hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowId wndId = Win32Interop.GetWindowIdFromWindow(Hwnd);
         _appWindow = AppWindow.GetFromWindowId(wndId);
 
-        var presenter = OverlappedPresenter.Create();
+        var presenter = _appWindow.Presenter.As<OverlappedPresenter>();
         presenter.IsAlwaysOnTop = true;
         presenter.IsMaximizable = false;
         presenter.IsMinimizable = false;
-        presenter.IsResizable = false;
         presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
-        _appWindow.SetPresenter(presenter);
 
         _appWindow.IsShownInSwitchers = false;
         _appWindow.Closing += OnAppWindowClosing;
@@ -76,9 +81,9 @@ public sealed partial class MainWindow : Window
 
     public void InitializePrewarmed()
     {
+        // A newly created WinUI 3 Window is hidden until Activate() or AppWindow.Show() is called.
         var bounds = NativeMethods.CalculateClampedPopupBounds(Hwnd, PopupLogicalWidth, PopupLogicalHeight, preferCaret: false);
         _appWindow.MoveAndResize(new RectInt32(bounds.X, bounds.Y, bounds.WidthPx, bounds.HeightPx));
-        _appWindow.Hide();
         IsPopupVisible = false;
     }
 

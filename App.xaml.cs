@@ -5,7 +5,7 @@ using Microsoft.UI.Xaml;
 
 namespace FluentClip;
 
-public partial class App : Application
+public sealed partial class App : Application
 {
     private nint _singleInstanceMutex;
 
@@ -19,6 +19,20 @@ public partial class App : Application
     public App()
     {
         Instance = this;
+        UnhandledException += (_, e) =>
+        {
+            try
+            {
+                string logDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "FluentClip");
+                System.IO.Directory.CreateDirectory(logDir);
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(logDir, "crash.log"),
+                    $"{DateTime.Now:O}\n{e.Message}\n{e.Exception}");
+            }
+            catch { }
+        };
         InitializeComponent();
     }
 
