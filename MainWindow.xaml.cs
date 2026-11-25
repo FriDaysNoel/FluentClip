@@ -11,9 +11,8 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.System;
-using Windows.UI;
-using Windows.UI.Core;
 using WinRT;
+using Color = Windows.UI.Color;
 
 namespace FluentClip;
 
@@ -380,7 +379,7 @@ public sealed partial class MainWindow : Window
         bodyContainer.Tapped += async (_, e) =>
         {
             e.Handled = true;
-            bool shiftHeld = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(CoreVirtualKeyStates.Down);
+            bool shiftHeld = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             await ExecutePasteAsync(item, pasteAsFile: shiftHeld);
         };
 
@@ -536,7 +535,7 @@ public sealed partial class MainWindow : Window
         {
             if (_selectedIndex >= 0 && _selectedIndex < _visibleItems.Count)
             {
-                bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(CoreVirtualKeyStates.Down);
+                bool shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
                 e.Handled = true;
                 await ExecutePasteAsync(_visibleItems[_selectedIndex], pasteAsFile: shift);
             }
@@ -560,8 +559,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        bool altDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(CoreVirtualKeyStates.Down);
-        bool ctrlDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(CoreVirtualKeyStates.Down);
+        bool altDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        bool ctrlDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
         if ((altDown || ctrlDown) && e.Key >= VirtualKey.Number1 && e.Key <= VirtualKey.Number9)
         {

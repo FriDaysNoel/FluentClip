@@ -11,7 +11,6 @@ using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using Windows.System;
-using Windows.UI.Core;
 
 namespace FluentClip;
 
@@ -320,7 +319,7 @@ public sealed partial class SettingsWindow : Window
 
     private static bool IsKeyDown(VirtualKey key)
     {
-        return InputKeyboardSource.GetKeyStateForCurrentThread(key).HasFlag(CoreVirtualKeyStates.Down);
+        return InputKeyboardSource.GetKeyStateForCurrentThread(key).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
     }
 
     private void FollowCaretSwitch_Toggled(object sender, RoutedEventArgs e)
