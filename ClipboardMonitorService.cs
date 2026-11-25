@@ -148,6 +148,16 @@ public sealed class ClipboardMonitorService : IDisposable
         _trayAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_ADD, ref nid);
     }
 
+    private unsafe void RemoveTrayIcon()
+    {
+        NativeMethods.NOTIFYICONDATAW nid = default;
+        nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
+        nid.hWnd = _hwnd;
+        nid.uID = TrayUid;
+        NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_DELETE, ref nid);
+        _trayAdded = false;
+    }
+
     public unsafe void UpdateTrayTooltip()
     {
         if (!_trayAdded || _hwnd == 0) return;
@@ -193,7 +203,9 @@ public sealed class ClipboardMonitorService : IDisposable
 
         if (msg == _msgTaskbarCreated && _msgTaskbarCreated != 0)
         {
-            _trayAdded = false;
+            // Normally the old icon died with the old taskbar, but delete first in case it survived
+            // (otherwise NIM_ADD fails and the icon is left un-updatable and un-removable).
+            RemoveTrayIcon();
             CreateTrayIcon();
             return 0;
         }
@@ -604,14 +616,7 @@ public sealed class ClipboardMonitorService : IDisposable
             NativeMethods.RemoveClipboardFormatListener(_hwnd);
 
             if (_trayAdded)
-            {
-                NativeMethods.NOTIFYICONDATAW nid = default;
-                nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
-                nid.hWnd = _hwnd;
-                nid.uID = TrayUid;
-                NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_DELETE, ref nid);
-                _trayAdded = false;
-            }
+                RemoveTrayIcon();
 
             NativeMethods.DestroyWindow(_hwnd);
             _hwnd = 0;

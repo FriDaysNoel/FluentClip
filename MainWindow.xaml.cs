@@ -36,6 +36,8 @@ public sealed partial class MainWindow : Window
     private int _selectedIndex = -1;
     private ClipRecord? _lightboxItem;
     private long _hiddenByDeactivationAtMs = long.MinValue;
+    private bool _hoverSelectionArmed;
+    private NativeMethods.POINT _cursorAtShow;
 
     // Decoded thumbnails keyed by image hash, so typing in the search box doesn't re-read and re-decode
     // up to 80 PNG files per keystroke (which also made thumbnails flicker).
@@ -108,6 +110,9 @@ public sealed partial class MainWindow : Window
         {
             CloseLightbox();
             PauseToggleBtn.IsChecked = App.Monitor.IsPaused;
+
+            _hoverSelectionArmed = false;
+            NativeMethods.GetCursorPos(out _cursorAtShow);
 
             bool followCaret = App.Storage.Config.FollowCursorOrCaret;
             var bounds = NativeMethods.CalculateClampedPopupBounds(Hwnd, PopupLogicalWidth, PopupLogicalHeight, followCaret);
@@ -412,9 +417,26 @@ public sealed partial class MainWindow : Window
         outerStack.Children.Add(bodyContainer);
         card.Child = outerStack;
 
-        card.PointerEntered += (_, _) => SelectCard(index, scrollIntoView: false);
+        card.PointerMoved += (_, _) => OnCardPointerMoved(index);
 
         return card;
+    }
+
+    // The popup opens next to the mouse, so the cursor usually already rests on some card. Selecting on
+    // PointerEntered moved the selection to that card at once, and Enter then pasted it instead of the newest
+    // item. Hover selection now starts only after the mouse has really moved since the popup opened.
+    private void OnCardPointerMoved(int index)
+    {
+        if (!_hoverSelectionArmed)
+        {
+            NativeMethods.GetCursorPos(out NativeMethods.POINT pt);
+            if (Math.Abs(pt.X - _cursorAtShow.X) + Math.Abs(pt.Y - _cursorAtShow.Y) < 6)
+                return;
+            _hoverSelectionArmed = true;
+        }
+
+        if (index != _selectedIndex)
+            SelectCard(index, scrollIntoView: false);
     }
 
     private async Task LoadThumbnailIntoImageAsync(Image target, string imageHash)
