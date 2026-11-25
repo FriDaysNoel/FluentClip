@@ -32,6 +32,7 @@ public sealed class ClipboardMonitorService : IDisposable
     private readonly uint _fmtCanIncludeHistory;
     private readonly uint _fmtInternalWrite;
     public readonly uint MsgShowPopupFromSecondInstance;
+    private readonly uint _msgTaskbarCreated;
 
     public bool IsPaused { get; set; }
     public nint LastExternalForegroundWindow { get; private set; }
@@ -52,6 +53,8 @@ public sealed class ClipboardMonitorService : IDisposable
         _fmtCanIncludeHistory = NativeMethods.RegisterClipboardFormatW("CanIncludeInClipboardHistory");
         _fmtInternalWrite = NativeMethods.RegisterClipboardFormatW("FluentClip_InternalWrite");
         MsgShowPopupFromSecondInstance = NativeMethods.RegisterWindowMessageW("FluentClip_ShowPopup_IPC");
+        // Broadcast by Explorer when the taskbar is (re)created; tray icons must be re-added or they vanish.
+        _msgTaskbarCreated = NativeMethods.RegisterWindowMessageW("TaskbarCreated");
     }
 
     public unsafe void Start()
@@ -113,7 +116,8 @@ public sealed class ClipboardMonitorService : IDisposable
 
     private unsafe void CreateTrayIcon()
     {
-        _trayIcon = NativeMethods.CreateFluentTrayIcon();
+        if (_trayIcon == 0)
+            _trayIcon = NativeMethods.CreateFluentTrayIcon();
 
         NativeMethods.NOTIFYICONDATAW nid = default;
         nid.cbSize = (uint)sizeof(NativeMethods.NOTIFYICONDATAW);
@@ -123,8 +127,8 @@ public sealed class ClipboardMonitorService : IDisposable
         nid.uCallbackMessage = NativeMethods.WM_TRAYICON;
         nid.hIcon = _trayIcon;
 
-        string tip = $"FluentClip 剪贴板 ({_storage.Config.HotkeyDisplay})";
-        WriteFixedString(nid.szTip, 128, tip);
+        string status = IsPaused ? "已暂停" : _storage.Config.HotkeyDisplay;
+        WriteFixedString(nid.szTip, 128, $"FluentClip 剪贴板 ({status})");
 
         _trayAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NIM_ADD, ref nid);
     }
@@ -153,9 +157,30 @@ public sealed class ClipboardMonitorService : IDisposable
 
     private nint WndProc(nint hWnd, uint msg, nint wParam, nint lParam)
     {
+        // Exceptions cannot unwind through the native window-procedure frame; they would terminate the process.
+        try
+        {
+            return WndProcCore(hWnd, msg, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            App.LogError($"WndProc 0x{msg:X4}", ex);
+            return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
+        }
+    }
+
+    private nint WndProcCore(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
         if (msg == MsgShowPopupFromSecondInstance && MsgShowPopupFromSecondInstance != 0)
         {
             _dispatcher.TryEnqueue(() => ShowPopupRequested?.Invoke());
+            return 0;
+        }
+
+        if (msg == _msgTaskbarCreated && _msgTaskbarCreated != 0)
+        {
+            _trayAdded = false;
+            CreateTrayIcon();
             return 0;
         }
 
@@ -172,13 +197,26 @@ public sealed class ClipboardMonitorService : IDisposable
             case NativeMethods.WM_CLIPBOARDUPDATE:
                 if (!IsPaused)
                 {
-                    _dispatcher.TryEnqueue(async () => await CaptureCurrentClipboardAsync());
+                    _dispatcher.TryEnqueue(async () =>
+                    {
+                        try
+                        {
+                            await CaptureCurrentClipboardAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            // async-void lambda: an escaping exception would take down the whole app
+                            App.LogError("CaptureClipboard", ex);
+                        }
+                    });
                 }
                 return 0;
 
             case NativeMethods.WM_TRAYICON:
                 uint mouseMsg = (uint)(lParam & 0xFFFF);
-                if (mouseMsg == NativeMethods.WM_LBUTTONUP || mouseMsg == NativeMethods.WM_LBUTTONDBLCLK)
+                // Only WM_LBUTTONUP: a double-click delivers UP, DBLCLK, UP, so also handling DBLCLK
+                // toggled the popup three times (open → close → open flicker).
+                if (mouseMsg == NativeMethods.WM_LBUTTONUP)
                 {
                     _dispatcher.TryEnqueue(() => TogglePopupRequested?.Invoke());
                     return 0;
@@ -224,6 +262,9 @@ public sealed class ClipboardMonitorService : IDisposable
                 _hwnd,
                 0);
 
+            // Documented TrackPopupMenu quirk: without this the menu may not close when clicking elsewhere.
+            NativeMethods.PostMessageW(_hwnd, NativeMethods.WM_NULL, 0, 0);
+
             switch ((uint)cmd)
             {
                 case CmdOpenPopup:
@@ -241,7 +282,7 @@ public sealed class ClipboardMonitorService : IDisposable
                     _dispatcher.TryEnqueue(() => PauseStateChanged?.Invoke());
                     break;
                 case CmdClearUnpinned:
-                    _storage.ClearUnpinned();
+                    _dispatcher.TryEnqueue(() => _storage.ClearUnpinned());
                     break;
                 case CmdExitApp:
                     _dispatcher.TryEnqueue(() => ExitRequested?.Invoke());

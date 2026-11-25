@@ -8,6 +8,7 @@ namespace FluentClip;
 
 internal static unsafe class NativeMethods
 {
+    public const int WM_NULL = 0x0000;
     public const int WM_DESTROY = 0x0002;
     public const int WM_ACTIVATE = 0x0006;
     public const int WM_CLOSE = 0x0010;
@@ -94,6 +95,11 @@ internal static unsafe class NativeMethods
     public const ushort VK_CONTROL = 0x11;
     public const ushort VK_MENU = 0x12; // Alt
     public const ushort VK_V = 0x56;
+    public const ushort VK_LWIN = 0x5B;
+    public const ushort VK_RWIN = 0x5C;
+
+    // Shcore
+    public const int MDT_EFFECTIVE_DPI = 0;
 
     // Process Query
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
@@ -462,6 +468,9 @@ internal static unsafe class NativeMethods
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
 
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(nint hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
     // Dwmapi
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(nint hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
@@ -538,7 +547,13 @@ internal static unsafe class NativeMethods
         mi.cbSize = (uint)sizeof(MONITORINFO);
         GetMonitorInfoW(hMon, ref mi);
 
-        uint dpi = popupHwnd != 0 ? GetDpiForWindow(popupHwnd) : 96;
+        // Size for the DPI of the monitor the popup is about to appear on, not the monitor it was last on;
+        // otherwise on mixed-DPI setups the popup comes out too big/small after moving between screens.
+        uint dpi = 0;
+        if (GetDpiForMonitor(hMon, MDT_EFFECTIVE_DPI, out uint monDpiX, out _) == 0)
+            dpi = monDpiX;
+        if (dpi == 0 && popupHwnd != 0)
+            dpi = GetDpiForWindow(popupHwnd);
         if (dpi == 0) dpi = 96;
         double scale = dpi / 96.0;
 
@@ -568,29 +583,27 @@ internal static unsafe class NativeMethods
 
     public static void SendCtrlV()
     {
-        INPUT* inputs = stackalloc INPUT[6];
+        INPUT* inputs = stackalloc INPUT[8];
         int count = 0;
 
-        // Release Alt or Shift if user still holds them from hotkey
-        if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0)
-        {
-            inputs[count].type = INPUT_KEYBOARD;
-            inputs[count].u.ki.wVk = VK_MENU;
-            inputs[count].u.ki.dwFlags = KEYEVENTF_KEYUP;
-            count++;
-        }
-        if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0)
-        {
-            inputs[count].type = INPUT_KEYBOARD;
-            inputs[count].u.ki.wVk = VK_SHIFT;
-            inputs[count].u.ki.dwFlags = KEYEVENTF_KEYUP;
-            count++;
-        }
-
-        // Ctrl Down
+        // Ctrl Down FIRST: releasing a lone Alt (or Win) with no key in between makes the target app
+        // activate its menu bar (or opens the Start menu) instead of receiving the paste.
         inputs[count].type = INPUT_KEYBOARD;
         inputs[count].u.ki.wVk = VK_CONTROL;
         count++;
+
+        // Release Alt / Shift / Win if the user still holds them (e.g. Alt+1..9 quick paste, Shift+Enter)
+        ReadOnlySpan<ushort> heldModifiers = [VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN];
+        foreach (ushort vk in heldModifiers)
+        {
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0)
+            {
+                inputs[count].type = INPUT_KEYBOARD;
+                inputs[count].u.ki.wVk = vk;
+                inputs[count].u.ki.dwFlags = KEYEVENTF_KEYUP;
+                count++;
+            }
+        }
 
         // V Down
         inputs[count].type = INPUT_KEYBOARD;

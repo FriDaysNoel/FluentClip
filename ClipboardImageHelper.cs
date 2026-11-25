@@ -143,12 +143,20 @@ internal static class ClipboardImageHelper
         if (biBitCount != 32 && biBitCount != 24) return false;
         if (biCompression != 0 && biCompression != 3) return false; // BI_RGB=0, BI_BITFIELDS=3
 
-        int pixelOffset = (int)biSize;
+        if (biSize < 40 || biSize > (uint)dib.Length) return false;
+        uint biClrUsed = BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(32, 4));
+        if (biClrUsed > 256) return false;
+
+        long pixelOffsetLong = biSize;
         if (biSize == 40 && biCompression == 3)
         {
             // Standard BITMAPINFOHEADER with BI_BITFIELDS appends 3 DWORD color masks (12 bytes)
-            pixelOffset += 12;
+            pixelOffsetLong += 12;
         }
+        // 24/32bpp DIBs may still carry an (unused) optimization color table that precedes the pixels
+        pixelOffsetLong += biClrUsed * 4L;
+        if (pixelOffsetLong >= dib.Length) return false;
+        int pixelOffset = (int)pixelOffsetLong;
 
         int srcStride = ((biWidth * biBitCount + 31) / 32) * 4;
         if (pixelOffset < 0 || pixelOffset + (long)srcStride * absHeight > dib.Length)
